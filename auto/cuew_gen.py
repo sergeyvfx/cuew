@@ -113,11 +113,28 @@ class FuncDefVisitor(c_ast.NodeVisitor):
             # TODO(sergey): Workaround to deal with the
             # preprocessed file where array size got
             # substituded.
-            dim = param_type.dim.value
+            dim = self._stringify_ast_node(param_type.dim)
             if param.name == "reserved" and dim == "64":
                 dim = "CU_IPC_HANDLE_SIZE"
             result += '[' + dim + ']'
         return result
+
+    def _stringify_ast_node(self, node):
+        if isinstance(node, c_ast.Constant):
+            return node.value
+        if isinstance(node, c_ast.BinaryOp):
+            return (self._stringify_ast_node(node.left) + ' ' + node.op + ' ' +
+                    self._stringify_ast_node(node.right))
+        if isinstance(node, c_ast.UnaryOp):
+            return node.op + '(' + self._stringify_ast_node(node.expr) + ')'
+        if isinstance(node, c_ast.Typename):
+            assert(not node.name)
+            assert(not node.quals)
+            assert(not node.align)
+            return self._stringify_ast_node(node.type)
+        if isinstance(node, c_ast.TypeDecl):
+            return self._get_ident_type(node)
+        raise Exception("Unhandled AST node in stringify " + str(node))
 
     def _stringify_params(self, params):
         result = []
@@ -181,8 +198,10 @@ class FuncDefVisitor(c_ast.NodeVisitor):
                     self._stringify_params(func_decl.args.params) + \
                     ');'
 
-                SYMBOLS.append(symbol_name)
-                FUNC_TYPEDEFS.append(typedef)
+                # cuGetProcAddress is a define for a static inlined function.
+                if symbol_name != 'cuGetProcAddress':
+                    SYMBOLS.append(symbol_name)
+                    FUNC_TYPEDEFS.append(typedef)
 
     def visit_Typedef(self, node):
         if node.name in self.dummy_typedefs:
@@ -220,7 +239,7 @@ class FuncDefVisitor(c_ast.NodeVisitor):
 
 def get_latest_cpp():
     path_prefix = "/usr/bin"
-    for major in ("9", "8", "7", "6", "5", "4"):
+    for major in ("12", "11", "10", "9", "8", "7", "6", "5", "4"):
         for minor in (".9", ".8", ".7", ".6", ".5", ".4", ".3", ".2", ".1", ""):
             test_cpp = os.path.join(path_prefix, "cpp-{}".format(major, minor))
             if os.path.exists(test_cpp):
@@ -232,7 +251,7 @@ def get_latest_cpp():
 
 
 def preprocess_file(filename, cpp_path):
-    args = [cpp_path, "-I./"]
+    args = [cpp_path, "-I./fake_include", "-I" + os.path.dirname(filename)]
     args.append("-DCUDA_ENABLE_DEPRECATED=1 ")
     if filename.endswith("GL.h"):
         args.append("-DCUDAAPI= ")
